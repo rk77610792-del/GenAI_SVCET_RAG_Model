@@ -4,6 +4,7 @@ import os
 import time
 import warnings
 import logging
+import tempfile  # ✅ added
 
 from langchain_groq import ChatGroq
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -46,11 +47,21 @@ with st.sidebar:
                 docs = []
 
                 for file in uploaded_files:
-                    with open(file.name, "wb") as f:
-                        f.write(file.getbuffer())
+                    # ✅ FIX: use temp file instead of file.name
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                        tmp.write(file.getbuffer())
+                        tmp_path = tmp.name
 
-                    loader = PyPDFLoader(file.name)
-                    docs.extend(loader.load())
+                    loader = PyPDFLoader(tmp_path)
+                    loaded_docs = loader.load()
+
+                    if loaded_docs:
+                        docs.extend(loaded_docs)
+
+                # ✅ FIX: prevent empty docs error
+                if not docs:
+                    st.error("❌ No readable content found in uploaded PDFs.")
+                    st.stop()
 
                 text_splitter = RecursiveCharacterTextSplitter(
                     chunk_size=1000,
@@ -58,6 +69,11 @@ with st.sidebar:
                 )
 
                 final_documents = text_splitter.split_documents(docs)
+
+                # ✅ FIX: prevent FAISS crash
+                if not final_documents:
+                    st.error("❌ No text chunks created from documents.")
+                    st.stop()
 
                 embeddings = HuggingFaceEmbeddings(
                     model_name="sentence-transformers/all-MiniLM-L6-v2"
@@ -79,7 +95,7 @@ llm = ChatGroq(
     model_name="llama-3.3-70b-versatile"
 )
 
-# ✅ FIXED PROMPT
+# ------------------ PROMPT ------------------
 prompt = ChatPromptTemplate.from_template(
     """
 You are an AI assistant. Answer ONLY using the provided context.
@@ -115,9 +131,7 @@ if prompt_input := st.chat_input("Ask a question about your documents..."):
         with st.spinner("Thinking..."):
             start = time.process_time()
 
-            # ✅ FIXED RETRIEVER
             retriever = st.session_state.vector.as_retriever()
-
             docs = retriever.invoke(prompt_input)
 
             if docs:
@@ -136,7 +150,6 @@ if prompt_input := st.chat_input("Ask a question about your documents..."):
 
             response_time = time.process_time() - start
 
-        # ✅ FIXED RESPONSE DISPLAY
         with st.chat_message("assistant"):
             st.markdown(response)
             st.info(f"Response time: {response_time:.2f} seconds")
